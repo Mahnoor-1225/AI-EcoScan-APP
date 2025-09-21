@@ -1,17 +1,18 @@
 # =========================
-# AI-EcoScan – Hugging Face Streamlit App
+# AI-EcoScan – Streamlit Version
 # =========================
 
 import streamlit as st
-from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
-import torch, wikipedia, matplotlib.pyplot as plt
+import torch
+from transformers import CLIPProcessor, CLIPModel
+import wikipedia
+import matplotlib.pyplot as plt
 import numpy as np
-import requests
-from io import BytesIO
+from googlesearch import search
 
 # ------------------------
-# 1. Load CLIP for material detection
+# 1. Load CLIP model
 # ------------------------
 @st.cache_resource
 def load_model():
@@ -63,78 +64,71 @@ def classify_material(image):
 # ------------------------
 # 4. Online fallback
 # ------------------------
-def fetch_from_wikipedia(material, query_type="impact"):
+def fetch_from_google(query, num_results=2):
+    try:
+        urls = list(search(query, num_results=num_results))
+        return "\n".join(urls) if urls else "No results found."
+    except:
+        return "Google search failed."
+
+def fetch_info(material, query_type="impact"):
     try:
         if query_type == "impact":
-            query = f"Environmental impact of {material}"
+            return wikipedia.summary(f"Environmental impact of {material}", sentences=3)
         elif query_type == "mechanical":
-            query = f"Mechanical properties of {material}"
+            return wikipedia.summary(f"Mechanical properties of {material}", sentences=3)
         else:
-            query = material
-        return wikipedia.summary(query, sentences=3)
+            return wikipedia.summary(material, sentences=3)
     except:
-        return "No reliable online data found."
+        return fetch_from_google(f"{material} {query_type}")
 
 def analyze_material(material):
     if material in sustainability_db:
         return sustainability_db[material]
     else:
         return {
-            "impact": fetch_from_wikipedia(material, "impact"),
-            "alternatives": [f"Recycled {material}", f"Eco-friendly {material}"],
+            "impact": fetch_info(material, "impact"),
+            "alternatives": ["Recycled " + material, "Eco-friendly " + material],
             "mechanical": {"strength": 5, "ductility": 5, "density": 5, "sustainability": 5},
-            "adaptation": ["Check sustainable processing methods"]
+            "adaptation": ["Search sustainable processing methods"]
         }
 
 def analyze_alternative(alt):
-    alt_key = alt.lower().replace(" ", "")
-    match = [k for k in sustainability_db.keys() if k.lower().replace(" ", "") == alt_key]
+    key = alt.lower().replace(" ", "")
+    match = [k for k in sustainability_db.keys() if k.lower().replace(" ", "") == key]
     if match:
         return sustainability_db[match[0]]
     else:
         return {
-            "impact": fetch_from_wikipedia(alt, "impact"),
+            "impact": fetch_info(alt, "impact"),
             "mechanical": {"strength": 5, "ductility": 5, "density": 5, "sustainability": 6},
             "adaptation": ["Look into green adaptations"],
             "alternatives": []
         }
 
 # ------------------------
-# 5. Comparison
+# 5. Comparison & Radar Chart
 # ------------------------
 def compare_materials(material, data):
-    original = data["mechanical"]
-
     if not data["alternatives"]:
         return "No alternatives found."
-
     best_alt = data["alternatives"][0]
     alt_data = analyze_alternative(best_alt)
-    alt_mech = alt_data["mechanical"]
-
-    verdict = f"### Comparison: {material.capitalize()} vs {best_alt}\n\n"
-    if alt_mech["sustainability"] > original["sustainability"]:
-        if alt_mech["strength"] >= original["strength"] - 2:
-            verdict += f"✅ {best_alt} is more eco-friendly and maintains comparable strength. **Recommended.**"
-        else:
-            verdict += f"⚠️ {best_alt} is more eco-friendly but has weaker strength. Possible trade-off."
+    verdict = f"Comparison: {material.capitalize()} vs {best_alt}\n\n"
+    if alt_data["mechanical"]["sustainability"] > data["mechanical"]["sustainability"]:
+        verdict += f"{best_alt} is more eco-friendly."
     else:
-        verdict += f"❌ {best_alt} does not provide a better balance of sustainability and performance."
-
-    verdict += f"\n\n**Environmental Info:**\n- {material.capitalize()}: {data['impact']}\n- {best_alt}: {alt_data['impact']}\n"
-
+        verdict += f"{best_alt} does not improve sustainability."
+    verdict += f"\n\nEnvironmental Info:\n- {material.capitalize()}: {data['impact']}\n- {best_alt}: {alt_data['impact']}\n"
     return verdict
 
-# ------------------------
-# 6. Radar Chart
-# ------------------------
-def plot_comparison(material, data):
+def plot_radar(material, data):
     categories = ["strength", "ductility", "density", "sustainability"]
     N = len(categories)
-
     orig_values = [data["mechanical"].get(cat, 5) for cat in categories]
 
-    alt_name, alt_values = None, None
+    alt_values = None
+    alt_name = None
     if data["alternatives"]:
         alt = data["alternatives"][0]
         alt_data = analyze_alternative(alt)
@@ -148,7 +142,6 @@ def plot_comparison(material, data):
     fig, ax = plt.subplots(figsize=(5,5), subplot_kw=dict(polar=True))
     ax.plot(angles, values, "o-", linewidth=2, label=material.capitalize())
     ax.fill(angles, values, alpha=0.25)
-
     if alt_values:
         alt_values = alt_values + [alt_values[0]]
         ax.plot(angles, alt_values, "o-", linewidth=2, label=alt_name)
@@ -160,29 +153,28 @@ def plot_comparison(material, data):
     return fig
 
 # ------------------------
-# 7. Streamlit UI
+# 6. Streamlit App
 # ------------------------
-st.title(" AI-EcoScan – Eco Materials Advisor ")
-st.markdown("Upload a material image. The system will detect, analyze, and compare its environmental and mechanical performance with alternatives.")
+st.set_page_config(page_title="AI-EcoScan", layout="wide")
+st.markdown("<h1 style='text-align:center; color: green;'>AI-EcoScan – Eco Materials Advisor</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;'>Upload a material image. The system will detect, analyze, and compare its environmental and mechanical performance.</p>", unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Upload / Capture Image", type=["jpg", "png", "jpeg"])
-
+uploaded_file = st.file_uploader("Upload / Capture Image", type=["png","jpg","jpeg"])
 if uploaded_file:
     img = Image.open(uploaded_file)
-    st.image(img, caption="Uploaded Image", use_container_width=True)
+    st.image(img, caption="Uploaded Image", use_column_width=True)
+    
+    material = classify_material(img)
+    data = analyze_material(material)
 
-    with st.spinner("Analyzing material..."):
-        material = classify_material(img)
-        data = analyze_material(material)
+    st.subheader("AI-EcoScan Report")
+    st.text(f"Detected Material: {material.capitalize()}")
+    st.text(f"Environmental Impact:\n{data['impact']}")
+    st.text(f"Possible Alternatives: {', '.join(data['alternatives']) if data['alternatives'] else 'None found'}")
+    st.text(f"Adaptation Techniques: {', '.join(data['adaptation'])}")
 
-        st.subheader("AI-EcoScan Report")
-        st.write(f"**Detected Material:** {material.capitalize()}")
-        st.write(f"**Environmental Impact:** {data['impact']}")
-        st.write(f"**Possible Alternatives:** {', '.join(data['alternatives']) if data['alternatives'] else 'None found'}")
-        st.write(f"**Adaptation Techniques:** {', '.join(data['adaptation'])}")
+    st.subheader("Recommendation")
+    st.text(compare_materials(material, data))
 
-        recommendation = compare_materials(material, data)
-        st.markdown(recommendation)
-
-        fig = plot_comparison(material, data)
-        st.pyplot(fig)
+    st.subheader("Mechanical Comparison Radar Chart")
+    st.pyplot(plot_radar(material, data))
